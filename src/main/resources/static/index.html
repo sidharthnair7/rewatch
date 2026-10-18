@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Rewatch</title>
+    <style>
+        :root {
+            --bg: #101114;
+            --card: #181a1f;
+            --text: #e8e8ea;
+            --muted: #9a9ca3;
+            --accent: #7cc4a4;
+            --border: #2a2d34;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+        h1 { margin: 0 0 4px; font-size: 28px; }
+        .tagline { color: var(--muted); margin: 0 0 24px; }
+        label { display: block; font-weight: 600; margin: 16px 0 6px; }
+        .hint { color: var(--muted); font-weight: 400; font-size: 14px; }
+        textarea {
+            width: 100%;
+            background: var(--card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            font: inherit;
+            resize: vertical;
+        }
+        button {
+            margin-top: 16px;
+            background: var(--accent);
+            color: #0b1a13;
+            border: 0;
+            border-radius: 8px;
+            padding: 10px 18px;
+            font-weight: 700;
+            font-size: 15px;
+            cursor: pointer;
+        }
+        button:disabled { opacity: 0.6; cursor: wait; }
+        button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); margin-left: 8px; }
+        .status { color: var(--muted); margin-top: 12px; min-height: 1.5em; }
+        .pattern {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-top: 14px;
+        }
+        .pattern h3 { margin: 0 0 6px; font-size: 16px; }
+        .meta { color: var(--muted); font-size: 14px; }
+        blockquote { margin: 8px 0 0; padding-left: 10px; border-left: 2px solid var(--border); color: var(--text); }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Rewatch</h1>
+    <p class="tagline">Rewatch your days. Your journal never leaves your computer.</p>
+
+    <label for="goals">Your goals</label>
+    <textarea id="goals" rows="3" placeholder="Save money for rent. Finish assignments early."></textarea>
+
+    <label for="journal">Your journal <span class="hint">(one day per line: 2026-10-01: what happened)</span></label>
+    <textarea id="journal" rows="12" placeholder="2026-10-01: Finished my lab, walked home, bought takeout."></textarea>
+
+    <button id="go">Rewatch</button>
+    <button id="sample" class="secondary">Try a made-up sample month</button>
+    <div class="status" id="status"></div>
+    <div id="results"></div>
+</main>
+
+<script>
+    const go = document.getElementById("go");
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+
+    // "2026-10-01: text" per line -> [{date, text}]
+    function parseJournal(raw) {
+        return raw.split("\n")
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+            .map(line => {
+                const match = line.match(/^(\d{4}-\d{2}-\d{2})\s*[:|-]\s*(.+)$/);
+                return match ? { date: match[1], text: match[2] } : null;
+            })
+            .filter(entry => entry !== null);
+    }
+
+    function show(report) {
+        results.innerHTML = "";
+        if (report.patterns.length === 0) {
+            status.textContent = "No obvious pattern found.";
+            return;
+        }
+        status.textContent = `Found ${report.patterns.length} pattern(s) in ${(report.millis / 1000).toFixed(0)}s, on your computer with ${report.model}.`;
+        for (const p of report.patterns) {
+            const card = document.createElement("div");
+            card.className = "pattern";
+            const title = document.createElement("h3");
+            title.textContent = p.pattern;
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.textContent = `${p.timesSeen} days: ${p.dates.join(", ")}`;
+            card.append(title, meta);
+            for (const quote of p.evidence) {
+                const q = document.createElement("blockquote");
+                q.textContent = quote;
+                card.append(q);
+            }
+            results.append(card);
+        }
+    }
+
+    // Fills the boxes with the made-up test month (not a real diary).
+    document.getElementById("sample").addEventListener("click", async () => {
+        const sample = await (await fetch("/sample-month.json")).json();
+        document.getElementById("goals").value = sample.goals;
+        document.getElementById("journal").value =
+            sample.entries.map(e => `${e.date}: ${e.text}`).join("\n");
+        results.innerHTML = "";
+        status.textContent = "Loaded a made-up 28-day journal. Press Rewatch.";
+    });
+
+    go.addEventListener("click", async () => {
+        const entries = parseJournal(document.getElementById("journal").value);
+        if (entries.length < 2) {
+            status.textContent = "Add at least two days, one per line, starting with the date.";
+            return;
+        }
+        go.disabled = true;
+        results.innerHTML = "";
+        status.textContent = "Rewatching your days...";
+        try {
+            const res = await fetch("/api/analyze", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ goals: document.getElementById("goals").value, entries })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            show(await res.json());
+        } catch (err) {
+            status.textContent = "Something went wrong: " + err.message + ". Is Ollama running?";
+        } finally {
+            go.disabled = false;
+        }
+    });
+</script>
+</body>
+</html>
